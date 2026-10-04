@@ -23,6 +23,7 @@ class Stub:
         self.polls = polls
         self.fail_summon = fail_summon
         self.by_op: dict[str, str] = {}
+        self.summon_kw: list[dict] = []
         self.lobby = SimpleNamespace(offer=self._offer)
 
     def _rec(self, *c):
@@ -58,6 +59,7 @@ class Stub:
         sid = self.by_op.setdefault(op, f"agt_{len(self.by_op) + 1}")
         self.status.setdefault(sid, ["running"] * self.polls + ["completed"])
         self._rec("summon", kw["name"], op, task)
+        self.summon_kw.append(kw)
         return SimpleNamespace(session_url=f"http://agentd/v1/sessions/{sid}")
 
     def session(self, url):
@@ -279,3 +281,25 @@ def test_sequential_deadline_stops_the_line(make):
     assert run["error"] == "max_duration reached before 1 worker(s) were summoned"
     assert [c[0] for c in stub.calls].count("summon") == 1
     assert [c[2] for c in stub.calls if c[0] == "stop"] == ["dispatch_max_duration"]
+
+
+def test_a_worker_can_mount_a_knowledge_base(make):
+    workers = [
+        {"name": "claude", "worker_type": "claude", "profile": "kb", "workspace": "/srv/kb/vpn"},
+        {"name": "ollama", "worker_type": "ollama", "profile": "ro"},
+    ]
+    r = make(template={"workers": workers})
+    run, _ = r.create("manual", "ask", "review", "How is a client added?")
+    assert r.execute(run["id"])["state"] == "done"
+    by_name = {kw["name"].split("-")[0]: kw for kw in r.client.summon_kw}
+    assert by_name["claude"]["workspace_path"] == "/srv/kb/vpn"
+    assert "workspace_path" not in by_name["ollama"]
+
+
+def test_a_workspace_must_be_absolute():
+    from pydantic import ValidationError
+
+    from dispatchd.config import WorkerSpec
+
+    with pytest.raises(ValidationError):
+        WorkerSpec(name="c", worker_type="claude", profile="kb", workspace="kb/vpn")

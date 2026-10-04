@@ -50,6 +50,15 @@ schedules:
 - **Workers** are spawned through agentd. Each one's room handle is its name plus the run's short id, e.g. `@claude-4k2qz`, so that overlapping runs never collide.
 - **Peers** are existing agents that receive a lobbyd offer. They join with their own identity, after dispatchd grants them rights in the closed room.
 
+**Knowledge bases:** a worker can have `workspace: /abs/path`, a directory on the agentd host mounted as its working directory, so it answers from a repo's files:
+
+```yaml
+    workers:
+      - {name: vpn, worker_type: claude-chat, profile: knowledge_read, workspace: /srv/kb/openvpn}
+```
+
+The profile decides read-only or read-write, and agentd only accepts paths under its `workspace_roots` and its grant for dispatchd. Mount a clean clone (`git clone`), not a working checkout: the worker can read every file there, gitignored secrets included. When `instance` isn't set, an agentd that doesn't have the directory is skipped.
+
 **When a run ends:** oneshot worker types end the run as soon as they finish. Interactive worker types keep the room open until `max_duration`.
 
 **Worker order:** `run.order` is `parallel` (the default: summon everyone at once) or `sequential`. Sequential summons each worker only after the previous one's session has ended, so later workers can read and build on earlier posts; use it with oneshot worker types. If the time limit hits first, the remaining workers aren't summoned, and the run says so.

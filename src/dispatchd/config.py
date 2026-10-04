@@ -58,6 +58,10 @@ class WorkerSpec(Strict):
     profile: str
     role: str | None = None
     instance: str | None = Field(default=None, description="agentd base URL; default: pick")
+    # A directory on the agentd host mounted as the worker's working dir (e.g. a repo as a
+    # knowledge base); the profile decides read or read_write. agentd's workspace_roots and
+    # its grant for dispatchd still bound it.
+    workspace: str | None = Field(default=None, pattern=r"^/")
 
 
 class PeerSpec(Strict):
