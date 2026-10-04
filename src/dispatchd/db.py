@@ -37,14 +37,26 @@ create unique index if not exists runs_delivery
 
 create table if not exists schedule_state (
   name text primary key,
+  spec text,          -- "cron|timezone" next_fire was computed from; a config edit recomputes
   next_fire text,
   last_fire text,
   last_run_id text
 );
 """
 
-SCHEMA_VERSION = 1
-MIGRATIONS: dict[int, ops.Migration] = {}
+
+def _v1_to_v2(conn: sqlite3.Connection) -> None:
+    conn.execute("alter table schedule_state add column spec text")
+
+
+SCHEMA_VERSION = 2
+MIGRATIONS: dict[int, ops.Migration] = {1: _v1_to_v2}
+# The baseline (v1) schema, for adopting unversioned databases.
+BASELINE = SCHEMA.replace(
+    '  spec text,          -- "cron|timezone" next_fire was computed from; a config edit'
+    " recomputes\n",
+    "",
+)
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -62,6 +74,7 @@ def init_db(path: Path, backup_dir: Path | None = None) -> dict:
         schema=SCHEMA,
         version=SCHEMA_VERSION,
         migrations=MIGRATIONS,
+        baseline_schema=BASELINE,
         backup_dir=backup_dir,
     )
     conn = connect(path)

@@ -178,7 +178,8 @@ class Settings:
     lobby_url: str
     api_key: str | None = field(default=None, repr=False)
     base_url: str = "http://127.0.0.1:8768"
-    poll_seconds: float = 5.0
+    poll_seconds: float = 5.0  # how often a run checks its workers
+    tick_seconds: float = 15.0  # how often schedules are checked
     operators: tuple[str, ...] = ()  # identities allowed on the operator HTTP API
 
     @property
@@ -199,5 +200,6 @@ class Settings:
             api_key=env("DISPATCHD_LOBBYD_API_KEY"),
             base_url=env("DISPATCHD_BASE_URL", cls.base_url).rstrip("/"),
             poll_seconds=float(env("DISPATCHD_POLL_SECONDS", 5)),
+            tick_seconds=float(env("DISPATCHD_TICK_SECONDS", 15)),
             operators=tuple(o for o in env("DISPATCHD_OPERATORS", "").split(",") if o),
         )

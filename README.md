@@ -11,8 +11,8 @@ dispatchd opens a room on its own, brings in the right agents, and gives them a 
 - archives the room afterwards.
 
 > **Status:** in development.
-> - **Phase 1 (this release):** templates, the run lifecycle and manual runs (`dispatchd run`).
-> - **Next:** the cron scheduler, then signed webhooks, then operations features.
+> - **Done:** templates, the run lifecycle, manual runs, and the cron scheduler (`dispatchd serve`).
+> - **Next:** signed webhooks, then operations features.
 
 ## Restrictions are templates
 
@@ -67,9 +67,19 @@ uv sync
 export DISPATCHD_CONFIG=dispatch.yaml DISPATCHD_DATA_DIR=.data
 export LOBBYD_URL=http://127.0.0.1:8767 DISPATCHD_LOBBYD_API_KEY=lbk_…
 uv run dispatchd check-config
+uv run dispatchd serve [--port 8768]           # the service: schedules fire, runs execute
+uv run dispatchd schedules                     # each schedule and when it fires next
 uv run dispatchd run weekday-triage            # run a schedule now, in the foreground
-uv run dispatchd runs                          # recent runs and their rooms
+uv run dispatchd runs [--name weekday-triage]  # recent runs and their rooms
 ```
+
+**Schedules**
+- **Format:** cron uses five fields (minute hour day month weekday) and is evaluated in the schedule's `timezone`, so DST is handled.
+- **New and edited schedules:** a schedule doesn't fire when it's first seen. It's scheduled for its next time, and editing its cron or time zone recomputes that time.
+- **Missed fires:** a fire missed by more than `catch_up` (default 5m), for example because dispatchd was down, is recorded as a skipped run and not replayed.
+- **Overlap:** a run still active when the next fire comes follows the template's `on_overlap`: `skip` or `allow` (up to `max_concurrent`).
+- **Restarts:** runs left pending or running by a previous process are resumed on startup. Every step is recorded, so nothing is duplicated.
+- **Config changes:** the config file is reloaded when it changes. An invalid edit keeps the last good definitions running, and `/readyz` reports the error until it's fixed.
 
 ## Development
 
