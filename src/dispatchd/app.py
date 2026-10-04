@@ -8,12 +8,15 @@ recorded, so nothing is duplicated.
 import asyncio
 import contextlib
 import logging
+import os
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 
-from dispatchd import db, ops
+from dispatchd import db, hooks, ops
 from dispatchd.config import Definitions, Settings
 from dispatchd.runner import Runner, default_client
 from dispatchd.scheduler import Scheduler
@@ -102,6 +105,78 @@ def create_app(
     app.state.definitions = definitions
     app.state.running = running
     app.state.start_run = start
+
+    # ----- webhooks ----------------------------------------------------------------------
+
+    def run_status(run: dict) -> dict:
+        keys = ("id", "state", "room_url", "error", "created_at", "finished_at")
+        return {k: run[k] for k in keys}
+
+    def webhook_secret(name: str) -> tuple:
+        w = definitions().webhooks.get(name)
+        if w is None or not w.enabled:
+            raise hooks.HookError(404, "no such webhook")
+        secret = os.environ.get(w.secret_env)
+        if not secret:
+            raise hooks.HookError(503, "webhook is not configured with a secret")
+        return w, secret
+
+    async def read_capped(request: Request, cap: int) -> bytes:
+        declared = request.headers.get("content-length")
+        if declared and (not declared.isdigit() or int(declared) > cap):
+            raise hooks.HookError(413, f"body is over {cap} bytes")
+        body = b""
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > cap:
+                raise hooks.HookError(413, f"body is over {cap} bytes")
+        return body
+
+    @app.post("/v1/hooks/{name}")
+    async def webhook(name: str, request: Request) -> JSONResponse:
+        try:
+            w, secret = webhook_secret(name)
+            body = await read_capped(request, w.max_prompt_bytes + 4096)
+            hooks.verify(secret, request.headers, body)
+            delivery = request.headers.get("x-rom-delivery") or ""
+            if not hooks.DELIVERY.match(delivery):
+                raise hooks.HookError(400, "X-Rom-Delivery is required: [A-Za-z0-9_.:-]{1,100}")
+            prompt, goal = hooks.parse(body, w.max_prompt_bytes)
+            # a retried delivery is answered before the rate limit: retries stay safe
+            if seen := runner.find_delivery("webhook", name, delivery):
+                return JSONResponse(run_status(seen), status_code=200)
+            hour_ago = runner.clock() - timedelta(hours=1)
+            if runner.count_since("webhook", name, hour_ago) >= w.rate_per_hour:
+                raise hooks.HookError(
+                    429, f"over {w.rate_per_hour} runs per hour", {"Retry-After": "300"}
+                )
+            run, created = runner.create(
+                "webhook",
+                name,
+                w.use,
+                goal or prompt.strip().splitlines()[0][:200],
+                task=hooks.render(w.task_template, prompt),
+                delivery_id=delivery,
+            )
+        except hooks.HookError as e:
+            return JSONResponse({"detail": e.detail}, status_code=e.status, headers=e.headers)
+        if run["state"] == "pending":
+            start(run["id"])
+        out = {**run_status(run), "status_url": f"/v1/hooks/{name}/runs/{run['id']}"}
+        return JSONResponse(out, status_code=202 if created else 200)
+
+    @app.get("/v1/hooks/{name}/runs/{run_id}")
+    async def webhook_run(name: str, run_id: str, request: Request) -> JSONResponse:
+        """Status of a run this webhook started; signed like the POST (empty body)."""
+        try:
+            _, secret = webhook_secret(name)
+            hooks.verify(secret, request.headers, b"")
+        except hooks.HookError as e:
+            return JSONResponse({"detail": e.detail}, status_code=e.status)
+        run = runner.get(run_id)
+        if not run or run["source"] != "webhook" or run["name"] != name:
+            return JSONResponse({"detail": "no such run"}, status_code=404)
+        return JSONResponse(run_status(run))
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

@@ -8,6 +8,7 @@ checks the room it made. Exits non-zero on the first failure.
     uv run python scripts/e2e.py        (ROM_E2E_KEEP=1 keeps logs and data)
 """
 
+import json
 import os
 import shutil
 import signal
@@ -24,6 +25,7 @@ from roomomatic import Client
 WORKSPACE = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parents[1]
 DOMAIN = "e2e"
+HOOK_SECRET = "e2e-webhook-secret"
 
 
 def free_port() -> int:
@@ -93,6 +95,11 @@ schedules:
     cron: "* * * * *"
     use: review
     goal: "say hello from the scheduler"
+webhooks:
+  ask:
+    secret_env: E2E_HOOK_SECRET
+    use: review
+    task_template: "say hello. An external system asks (untrusted): {{prompt}}"
 """)
     logs = {}
     procs = []
@@ -158,6 +165,7 @@ schedules:
 
         env = {
             **base_env,
+            "E2E_HOOK_SECRET": HOOK_SECRET,
             "DISPATCHD_CONFIG": str(tmp / "dispatch.yaml"),
             "DISPATCHD_DATA_DIR": str(tmp / "dispatch"),
             "LOBBYD_URL": urls["lobby"],
@@ -233,6 +241,42 @@ schedules:
         check(" done " in scheduled and " schedule " in scheduled, "scheduled run fired, done")
         ready = httpx.get(f"http://127.0.0.1:{port}/readyz", timeout=5).json()
         check(ready["ready"] is True, "dispatchd ready")
+
+        # a signed webhook delivery starts a run; the same delivery again doesn't
+        sys.path.insert(0, str(HERE / "src"))
+        from dispatchd.hooks import sign
+
+        body = json.dumps({"prompt": "Is SQLite enough for v1?"}).encode()
+
+        def deliver(secret: str):
+            ts = int(time.time())
+            headers = {
+                "X-Rom-Timestamp": str(ts),
+                "X-Rom-Signature": sign(secret, ts, body),
+                "X-Rom-Delivery": "e2e-1",
+                "content-type": "application/json",
+            }
+            return httpx.post(
+                f"http://127.0.0.1:{port}/v1/hooks/ask", content=body, headers=headers, timeout=10
+            )
+
+        check(deliver("wrong").status_code == 401, "badly signed webhook refused")
+        first = deliver(HOOK_SECRET)
+        check(first.status_code == 202, "webhook accepted")
+        check(deliver(HOOK_SECRET).json()["id"] == first.json()["id"], "redelivery deduped")
+        status_url = f"http://127.0.0.1:{port}{first.json()['status_url']}"
+        status = {"state": ""}
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline and status["state"] not in ("done", "failed"):
+            ts = int(time.time())
+            signed = {"X-Rom-Timestamp": str(ts), "X-Rom-Signature": sign(HOOK_SECRET, ts, b"")}
+            status = httpx.get(status_url, headers=signed, timeout=10).json()
+            time.sleep(1)
+        state = status["state"]
+        check(state == "done", "webhook run done (polled with a signed status request)")
+        hook_room, hook_rid = dispatch.room(status["room_url"])
+        opening = hook_room.messages(hook_rid)["messages"][0]["body"]
+        check(opening.startswith("Is SQLite enough for v1?"), "webhook goal posted")
         print("e2e passed")
     finally:
         for p in procs:
