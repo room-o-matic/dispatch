@@ -365,6 +365,7 @@ class Runner:
             role=w.role,
             instance_url=w.instance,
             operation_id=f"{run['id']}.{w.name}",
+            **({"workspace_path": w.workspace} if w.workspace else {}),
         )
         return s.session_url
 

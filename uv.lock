@@ -534,7 +534,7 @@ wheels = [
 [[package]]
 name = "roomomatic"
 version = "0.1.0"
-source = { git = "https://github.com/room-o-matic/client#cd3b6c469d3f220ee744c331cdb03bf9dc9be51e" }
+source = { git = "https://github.com/room-o-matic/client#ead0070713fc3b7e76922450fa5b465d88887157" }
 dependencies = [
     { name = "httpx" },
 ]
