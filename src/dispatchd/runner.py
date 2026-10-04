@@ -264,8 +264,8 @@ class Runner:
             run = self.get(run_id)
             self._seed(run, t)
             self._peers(run, t)
-            self._workers(run, t)
-            stopped = self._wait(self.get(run_id), t)
+            cut_short = self._workers(run, t)
+            stopped = self._wait(self.get(run_id), t) or cut_short
             self._finalize(self.get(run_id))
             self._finish(run_id, "done", stopped, t.room.archive_after)
         except Exception as e:  # noqa: BLE001 - recorded on the run; workers are stopped
@@ -333,27 +333,40 @@ class Runner:
             offers[p.agent] = offer_id
             self._update(run["id"], offers=offers)
 
-    def _workers(self, run: dict, t: Template) -> None:
+    def _workers(self, run: dict, t: Template) -> str | None:
+        """Summon the workers (in parallel, or one after another). Returns a note if the
+        deadline cut a sequential run short."""
         sessions = dict(run["sessions"])
         deadline = run["deadline_at"] or now_iso(
             self.clock() + timedelta(seconds=t.run.max_duration)
         )
         self._update(run["id"], deadline_at=deadline)
-        for w in t.workers:
-            if w.name in sessions:
-                continue
-            s = self.client.summon(
-                run["room_url"],
-                run["task"],
-                worker_type=w.worker_type,
-                profile=w.profile,
-                name=worker_handle(w.name, run["id"]),
-                role=w.role,
-                instance_url=w.instance,
-                operation_id=f"{run['id']}.{w.name}",
-            )
-            sessions[w.name] = s.session_url
-            self._update(run["id"], sessions=sessions)
+        sequential = t.run.order == "sequential"
+        for i, w in enumerate(t.workers):
+            if w.name not in sessions:
+                if sequential and self.clock() >= datetime.fromisoformat(deadline):
+                    left = len(t.workers) - i
+                    return f"max_duration reached before {left} worker(s) were summoned"
+                sessions[w.name] = self._summon(run, w)
+                self._update(run["id"], sessions=sessions)
+            if sequential:
+                self._wait(
+                    {**run, "sessions": {w.name: sessions[w.name]}, "deadline_at": deadline}, t
+                )
+        return None
+
+    def _summon(self, run: dict, w) -> str:
+        s = self.client.summon(
+            run["room_url"],
+            run["task"],
+            worker_type=w.worker_type,
+            profile=w.profile,
+            name=worker_handle(w.name, run["id"]),
+            role=w.role,
+            instance_url=w.instance,
+            operation_id=f"{run['id']}.{w.name}",
+        )
+        return s.session_url
 
     def _status(self, session_url: str) -> str:
         agentd, sid = self.client.session(session_url)
