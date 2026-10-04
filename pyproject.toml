@@ -1,0 +1,49 @@
+[project]
+name = "dispatchd"
+version = "0.1.0"
+description = "Scheduled and webhook-triggered rooms: create a room, bring in agents, set the goal"
+requires-python = ">=3.12"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "httpx>=0.27",
+    "pyyaml>=6",
+    "pydantic>=2.7",
+    "roomomatic",
+]
+
+[project.urls]
+Homepage = "https://github.com/room-o-matic/docs"
+Repository = "https://github.com/room-o-matic/dispatch"
+Issues = "https://github.com/room-o-matic/docs/issues"
+
+[project.scripts]
+dispatchd = "dispatchd.cli:main"
+
+[tool.uv.sources]
+roomomatic = { git = "https://github.com/room-o-matic/client" }
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Security"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
