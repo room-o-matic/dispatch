@@ -137,7 +137,20 @@ Operators authenticate with lobbyd access tokens issued for dispatchd's `DISPATC
 | `GET /v1/runs?source=&name=&limit=` · `GET /v1/runs/{id}` | runs: state, room, sessions, offers, error |
 | `GET /v1/schedules` | each schedule's next and last fire |
 | `POST /v1/schedules/{name}/run` | run a schedule now (source `manual`) |
+| `GET` · `PUT` · `DELETE /v1/templates/{name}` (`GET /v1/templates`) | API-managed templates |
+| `GET` · `PUT` · `DELETE /v1/schedules/{name}` | API-managed schedules; `GET` adds next/last fire and recent runs |
+| `GET /v1/webhooks` · `GET /v1/webhooks/{name}` | webhooks with their `url_path` and recent runs; never the secret |
+| `POST /v1/webhooks/{name}` | create a webhook: 201 with a generated `secret`, shown only this once |
+| `POST /v1/webhooks/{name}/rotate-secret` · `DELETE /v1/webhooks/{name}` | new secret (the old one stops working at once); delete |
 | `/healthz` · `/readyz` · `/metrics` | `/readyz` checks the database, the config (whether the last edit is valid) and the scheduler loop |
+
+### Definitions from the API
+
+Templates, schedules and webhooks can also be created over the operator API (and from Claude Code through `rom mcp`). They are stored in dispatchd's database and validated **together with the config file** as one set, so a schedule naming an unknown template, a bad cron, or deleting a template still in use is a 422.
+
+- **The file stays authoritative.** Its definitions are read-only through the API (409). A name defined in both is an error: an API write that would collide is refused, and a file edit that collides keeps the last good set running and fails `/readyz` until one is removed.
+- **API webhooks get a generated secret** (`whsec_…`), returned once on create or rotate and stored in the database; they can't use `secret_env`. Webhooks in the file still need `secret_env`.
+- API definitions are restored with the database (`dispatchd backup`/`restore`), like runs. A secret retired since the snapshot (rotated, or its webhook deleted) is journaled to `DISPATCHD_REVOCATION_JOURNAL` (default `<data dir>/revocations.jsonl`) and cleared again by the restore; that webhook answers 503 until you rotate it.
 
 ## Operations
 
