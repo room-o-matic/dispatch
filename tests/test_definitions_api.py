@@ -40,7 +40,7 @@ def env(tmp_path, monkeypatch):
         lobby_domain=DOMAIN,
         base_url=BASE,
         poll_seconds=0.01,
-        tick_seconds=0.05,
+        tick_seconds=3600,  # the scheduler loop never helps: writes must plan by themselves
         operators=(f"ops@{DOMAIN}",),
     )
 
@@ -80,11 +80,7 @@ def test_create_a_schedule(c, env):
     assert r.json()["created_by"] == f"ops@{DOMAIN}"
     names = [s["name"] for s in c.get("/v1/schedules", headers=ops).json()]
     assert names == ["triage", "nightly"]
-    for _ in range(100):  # the scheduler loop picks it up
-        if c.get("/v1/schedules/nightly", headers=ops).json()["next_fire"]:
-            break
-        time.sleep(0.02)
-    assert c.get("/v1/schedules/nightly", headers=ops).json()["next_fire"].endswith("02:30:00.000Z")
+    assert r.json()["next_fire"].endswith("02:30:00.000Z")  # live test: was null until a tick
 
 
 @pytest.mark.parametrize(

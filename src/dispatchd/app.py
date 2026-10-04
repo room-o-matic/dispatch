@@ -318,6 +318,8 @@ def create_app(
         else:
             store.put(singular[kind], name, body, who, stamp(), secret=secret)
         definitions.refresh()
+        if kind == "schedules" and body is not None:
+            scheduler.plan(name)
         log.info("%s %s %s %s", who, "deleted" if body is None else "wrote", kind[:-1], name)
 
     @app.get("/v1/templates")

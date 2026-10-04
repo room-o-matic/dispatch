@@ -49,6 +49,17 @@ class Scheduler:
         finally:
             conn.close()
 
+    def plan(self, name: str) -> None:
+        """Compute a new or edited schedule's next fire now, so the API can show it at once
+        instead of after the next tick. Never fires anything."""
+        s = self.definitions().schedules.get(name)
+        if s is None or not s.enabled:
+            return
+        spec = f"{s.cron}|{s.timezone}"
+        if (self.state().get(name) or {}).get("spec") != spec:
+            nxt = Cron.parse(s.cron).next_after(self.runner.clock(), s.timezone)
+            self._save(name, spec=spec, next_fire=now_iso(nxt))
+
     def tick(self) -> list[str]:
         """Returns the ids of runs created now (pending, ready to execute)."""
         now = self.runner.clock()
