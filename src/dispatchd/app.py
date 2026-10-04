@@ -12,14 +12,17 @@ import os
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from dispatchd import db, hooks, ops
 from dispatchd.config import Definitions, Settings
 from dispatchd.runner import Runner, default_client
 from dispatchd.scheduler import Scheduler
+from dispatchd.verify import InvalidToken, TokenVerifier
 
 log = logging.getLogger("dispatchd")
 
@@ -54,6 +57,7 @@ def create_app(
     *,
     client=None,
     tick_seconds: float | None = None,
+    verifier: TokenVerifier | None = None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     tick_seconds = tick_seconds or settings.tick_seconds
@@ -177,6 +181,102 @@ def create_app(
         if not run or run["source"] != "webhook" or run["name"] != name:
             return JSONResponse({"detail": "no such run"}, status_code=404)
         return JSONResponse(run_status(run))
+
+    # ----- operator API ----------------------------------------------------------------
+    # lobbyd access tokens for this service's base_url, from identities listed in
+    # DISPATCHD_OPERATORS. Default deny: with no operators configured, nobody gets in.
+
+    verifier = verifier or TokenVerifier(
+        issuer=settings.lobby_url,
+        domain=settings.lobby_domain,
+        audience=settings.base_url,
+        jwks_url=settings.lobby_jwks_url,
+    )
+    bearer = HTTPBearer(auto_error=False)
+
+    async def operator(
+        creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    ) -> str:
+        if creds is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing bearer token")
+        try:
+            claims = await asyncio.to_thread(verifier.verify, creds.credentials)
+        except InvalidToken as e:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token") from e
+        if claims.scope != "agent" or claims.identity not in settings.operators:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"{claims.identity} is not an operator")
+        return claims.identity
+
+    Operator = Annotated[str, Depends(operator)]
+
+    @app.get("/v1/runs")
+    async def list_runs(
+        who: Operator, source: str | None = None, name: str | None = None, limit: int = 50
+    ) -> list[dict]:
+        return await asyncio.to_thread(runner.recent, source, name, min(limit, 500))
+
+    @app.get("/v1/runs/{run_id}")
+    async def get_run(run_id: str, who: Operator) -> dict:
+        run = await asyncio.to_thread(runner.get, run_id)
+        if run is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such run")
+        return run
+
+    @app.get("/v1/schedules")
+    async def list_schedules(who: Operator) -> list[dict]:
+        state = await asyncio.to_thread(scheduler.state)
+        return [
+            {
+                "name": n,
+                "cron": s.cron,
+                "timezone": s.timezone,
+                "use": s.use,
+                "enabled": s.enabled,
+                "next_fire": state.get(n, {}).get("next_fire"),
+                "last_fire": state.get(n, {}).get("last_fire"),
+                "last_run_id": state.get(n, {}).get("last_run_id"),
+            }
+            for n, s in definitions().schedules.items()
+        ]
+
+    @app.post("/v1/schedules/{name}/run", status_code=status.HTTP_202_ACCEPTED)
+    async def trigger(name: str, who: Operator) -> dict:
+        s = definitions().schedules.get(name)
+        if s is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such schedule")
+        run, _ = await asyncio.to_thread(runner.create, "manual", name, s.use, s.goal)
+        log.info("%s triggered schedule %s: run %s", who, name, run["id"])
+        if run["state"] == "pending":
+            start(run["id"])
+        return run
+
+    @app.get("/metrics")
+    def metrics() -> Response:
+        conn = db.connect(settings.db_path)
+        try:
+            by_state = dict(conn.execute("select state, count(*) from runs group by state"))
+            hour_ago = runner.clock() - timedelta(hours=1)
+            recent = conn.execute(
+                "select count(*) from runs where source = 'webhook' and created_at > ?",
+                (hour_ago.isoformat().replace("+00:00", "Z"),),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        defs = definitions()
+        gauges = {
+            f"runs_{s}": by_state.get(s, 0)
+            for s in ("pending", "running", "done", "failed", "skipped")
+        }
+        gauges |= {
+            "runs_executing": len(running),
+            "schedules": len(defs.schedules),
+            "webhooks": len(defs.webhooks),
+            "webhook_runs_last_hour": recent,
+            "config_ok": definitions.error is None,
+            "scheduler_failures": health.failures,
+            "scheduler_age_seconds": health.age(),
+        }
+        return Response(ops.prometheus("dispatchd", gauges), media_type="text/plain; version=0.0.4")
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

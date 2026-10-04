@@ -102,6 +102,46 @@ def cmd_schedules(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backup(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from dispatchd import db, recovery
+
+    settings = Settings.from_env()
+    db.init_db(settings.db_path, backup_dir=settings.backup_dir)
+    manifest = recovery.backup(settings, Path(args.out))
+    print(json.dumps({k: v for k, v in manifest.items() if k != "files"}, indent=2))
+    return 0
+
+
+def cmd_verify_backup(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from dispatchd import ops
+
+    try:
+        m = ops.verify_backup(Path(args.path))
+    except ops.BackupError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(f"ok: {m['service']} schema v{m['schema_version']}, taken {m['created_at']}")
+    return 0
+
+
+def cmd_restore(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from dispatchd import ops, recovery
+
+    try:
+        report = recovery.restore(Settings.from_env(), Path(args.source), force=args.force)
+    except (ops.BackupError, ops.SchemaError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="dispatchd", description="Scheduled and webhook-triggered rooms"
@@ -125,6 +165,16 @@ def build_parser() -> argparse.ArgumentParser:
     ls.add_argument("--name")
     ls.add_argument("--limit", type=int, default=20)
     ls.set_defaults(func=cmd_runs)
+    b = sub.add_parser("backup", help="snapshot the database (safe while serving)")
+    b.add_argument("--out", required=True)
+    b.set_defaults(func=cmd_backup)
+    v = sub.add_parser("verify-backup", help="check a backup's checksums and integrity")
+    v.add_argument("path")
+    v.set_defaults(func=cmd_verify_backup)
+    r = sub.add_parser("restore", help="restore a backup into $DISPATCHD_DATA_DIR (stopped)")
+    r.add_argument("source")
+    r.add_argument("--force", action="store_true", help="move an existing database aside")
+    r.set_defaults(func=cmd_restore)
     return p
 
 
