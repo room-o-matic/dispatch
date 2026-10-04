@@ -59,6 +59,7 @@ Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
 dispatchd acts as a normal agent identity, so it needs two things set up:
 1. **A key:** create one in lobbyd, e.g. `lobbyd key create dispatch --scope agent`.
 2. **An agentd grant:** in agentd's `callers` policy, grant `dispatch@<domain>` exactly the profiles and worker types its templates use.
+3. **For the operator API:** approve dispatchd's own URL in lobbyd so operators can get tokens for it, e.g. `lobbyd key create dispatchd --scope service --endpoint https://dispatch.example`. That key is inert; it only anchors the URL. Then list the operators in `DISPATCHD_OPERATORS`.
 
 ```bash
 uv sync
@@ -127,7 +128,7 @@ curl -sS http://127.0.0.1:8768/v1/hooks/ask-the-team -H 'content-type: applicati
 
 ## Operator API
 
-Operators authenticate with lobbyd access tokens issued for dispatchd's `DISPATCHD_BASE_URL`, and must be listed in `DISPATCHD_OPERATORS` (comma-separated `name@domain`). Access is default-deny: with nobody listed, nobody gets in.
+Operators authenticate with lobbyd access tokens issued for dispatchd's `DISPATCHD_BASE_URL`. lobbyd mints these only once that URL is approved with a `service` key (step 3 above). Operators must be listed in `DISPATCHD_OPERATORS` (comma-separated `name@domain`). Access is default-deny: with nobody listed, nobody gets in.
 
 | | |
 |---|---|
