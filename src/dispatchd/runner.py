@@ -157,9 +157,10 @@ class Runner:
         task: str | None = None,
         delivery_id: str | None = None,
     ) -> tuple[dict, bool]:
-        """Record a run. Returns (run, created); a repeated webhook delivery returns the
-        original run with created=False. A run over the template's overlap limit is
-        recorded as skipped."""
+        """Record a run. `goal` goes into the room (notes, opening post); the agents' task
+        is `task` (default: the goal) plus the template's rules. Returns (run, created);
+        a repeated webhook delivery returns the original run with created=False. A run
+        over the template's overlap limit is recorded as skipped."""
         defs = self.definitions()
         t = defs.templates[template]
         now = now_iso(self.clock())
@@ -190,7 +191,7 @@ class Runner:
                         name,
                         template,
                         goal,
-                        task or compose_task(goal, t, run),
+                        compose_task(task or goal, t, run),
                         delivery_id,
                         state,
                         error,
@@ -208,6 +209,27 @@ class Runner:
         finally:
             conn.close()
         return self.get(run_id), True
+
+    def find_delivery(self, source: str, name: str, delivery_id: str) -> dict | None:
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "select * from runs where source = ? and name = ? and delivery_id = ?",
+                (source, name, delivery_id),
+            ).fetchone()
+        finally:
+            conn.close()
+        return db.run_dict(row) if row else None
+
+    def count_since(self, source: str, name: str, since: datetime) -> int:
+        conn = self._conn()
+        try:
+            return conn.execute(
+                "select count(*) from runs where source = ? and name = ? and created_at > ?",
+                (source, name, now_iso(since)),
+            ).fetchone()[0]
+        finally:
+            conn.close()
 
     def mark_skipped(self, run_id: str, reason: str) -> None:
         now = now_iso(self.clock())
