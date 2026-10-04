@@ -95,4 +95,13 @@ def test_cli_registers_every_command():
     from dispatchd.cli import build_parser
 
     sub = next(a for a in build_parser()._actions if a.dest == "command")
-    assert set(sub.choices) == {"serve", "check-config", "schedules", "run", "runs"}
+    assert set(sub.choices) == {
+        "serve",
+        "check-config",
+        "schedules",
+        "run",
+        "runs",
+        "backup",
+        "verify-backup",
+        "restore",
+    }

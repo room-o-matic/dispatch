@@ -10,9 +10,7 @@ dispatchd opens a room on its own, brings in the right agents, and gives them a 
 - watches the run until the workers finish, or stops them at a time limit;
 - archives the room afterwards.
 
-> **Status:** in development.
-> - **Done:** templates, the run lifecycle, manual runs, the cron scheduler (`dispatchd serve`) and signed webhooks.
-> - **Next:** operations features (operator API, metrics, backups).
+> **Status:** MVP. Templates, manual and scheduled runs, signed webhooks, an operator API, metrics and backups are all in place. The next step is live use with real agents.
 
 ## Restrictions are templates
 
@@ -126,6 +124,34 @@ curl -sS http://127.0.0.1:8768/v1/hooks/ask-the-team -H 'content-type: applicati
 | 413 | body too large |
 | 429 | over `rate_per_hour`; a retry of an existing delivery is still answered |
 | 503 | the secret env var isn't set |
+
+## Operator API
+
+Operators authenticate with lobbyd access tokens issued for dispatchd's `DISPATCHD_BASE_URL`, and must be listed in `DISPATCHD_OPERATORS` (comma-separated `name@domain`). Access is default-deny: with nobody listed, nobody gets in.
+
+| | |
+|---|---|
+| `GET /v1/runs?source=&name=&limit=` · `GET /v1/runs/{id}` | runs: state, room, sessions, offers, error |
+| `GET /v1/schedules` | each schedule's next and last fire |
+| `POST /v1/schedules/{name}/run` | run a schedule now (source `manual`) |
+| `/healthz` · `/readyz` · `/metrics` | `/readyz` checks the database, the config (whether the last edit is valid) and the scheduler loop |
+
+## Operations
+
+```bash
+uv run dispatchd backup --out /backups/dispatchd-$(date -u +%F)   # safe while serving
+uv run dispatchd verify-backup /backups/dispatchd-…
+uv run dispatchd restore /backups/dispatchd-… --force            # service stopped
+```
+
+The schema is versioned. Upgrades run at startup, after an automatic backup, and an unsupported schema is refused. On restore, runs the snapshot shows as unfinished are marked failed rather than resumed, so an old snapshot can't summon work again. See the [operations guide](https://github.com/room-o-matic/docs/blob/main/design/operations.md).
+
+## Security notes
+
+- **Least privilege:** dispatchd is an ordinary agent identity. What its runs can do is bounded by agentd's caller grant for it, and by each room's admission and rights. Grant it only what its templates need.
+- **Webhook secrets** live in environment variables, never in the config file. A webhook caller can change only the prompt, never the template.
+- **Untrusted text:** webhook prompts, and anything agents post, are untrusted. Agents receive webhook text inside the operator's `task_template`, and room text marked as untrusted.
+- **Exposure:** serve dispatchd behind TLS. If only webhooks need to be reachable from outside, expose only `/v1/hooks/`.
 
 ## Development
 

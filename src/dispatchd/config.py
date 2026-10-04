@@ -177,6 +177,8 @@ class Settings:
     config_path: Path
     lobby_url: str
     api_key: str | None = field(default=None, repr=False)
+    lobby_domain: str = "local"  # identities are name@domain
+    lobby_jwks_url: str | None = None
     base_url: str = "http://127.0.0.1:8768"
     poll_seconds: float = 5.0  # how often a run checks its workers
     tick_seconds: float = 15.0  # how often schedules are checked
@@ -198,6 +200,8 @@ class Settings:
             config_path=Path(env("DISPATCHD_CONFIG", "/etc/dispatchd/dispatch.yaml")),
             lobby_url=env("LOBBYD_URL", "http://127.0.0.1:8767").rstrip("/"),
             api_key=env("DISPATCHD_LOBBYD_API_KEY"),
+            lobby_domain=env("LOBBYD_DOMAIN", "local"),
+            lobby_jwks_url=env("LOBBYD_JWKS_URL"),
             base_url=env("DISPATCHD_BASE_URL", cls.base_url).rstrip("/"),
             poll_seconds=float(env("DISPATCHD_POLL_SECONDS", 5)),
             tick_seconds=float(env("DISPATCHD_TICK_SECONDS", 15)),
