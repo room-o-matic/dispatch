@@ -89,3 +89,10 @@ def test_a_valid_definition():
 def test_invalid_definitions(extra, message):
     with pytest.raises(ValidationError, match=message):
         Definitions.model_validate({**BASE, **extra})
+
+
+def test_cli_registers_every_command():
+    from dispatchd.cli import build_parser
+
+    sub = next(a for a in build_parser()._actions if a.dest == "command")
+    assert set(sub.choices) == {"serve", "check-config", "schedules", "run", "runs"}

@@ -209,6 +209,10 @@ class Runner:
             conn.close()
         return self.get(run_id), True
 
+    def mark_skipped(self, run_id: str, reason: str) -> None:
+        now = now_iso(self.clock())
+        self._update(run_id, state="skipped", error=reason, finished_at=now)
+
     # ----- executing -------------------------------------------------------------------------
 
     def unfinished(self) -> list[str]:

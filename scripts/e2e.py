@@ -89,6 +89,10 @@ schedules:
     cron: "0 7 * * 1-5"
     use: review
     goal: "say hello and summarise the room"
+  every-minute:
+    cron: "* * * * *"
+    use: review
+    goal: "say hello from the scheduler"
 """)
     logs = {}
     procs = []
@@ -206,6 +210,29 @@ schedules:
             [bin_(HERE, "dispatchd"), "runs"], env=env, capture_output=True, text=True
         )
         check(" done " in out.stdout and "manual" in out.stdout, "runs lists it")
+
+        # the service: an every-minute schedule fires on its own
+        port = free_port()
+        start(
+            "dispatchd",
+            [bin_(HERE, "dispatchd"), "serve", "--port", str(port)],
+            {**env, "DISPATCHD_TICK_SECONDS": "1"},
+        )
+        deadline = time.monotonic() + 150
+        scheduled = ""
+        while time.monotonic() < deadline:
+            scheduled = subprocess.run(
+                [bin_(HERE, "dispatchd"), "runs", "--name", "every-minute"],
+                env=env,
+                capture_output=True,
+                text=True,
+            ).stdout
+            if " done " in scheduled:
+                break
+            time.sleep(2)
+        check(" done " in scheduled and " schedule " in scheduled, "scheduled run fired, done")
+        ready = httpx.get(f"http://127.0.0.1:{port}/readyz", timeout=5).json()
+        check(ready["ready"] is True, "dispatchd ready")
         print("e2e passed")
     finally:
         for p in procs:

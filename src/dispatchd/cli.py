@@ -75,13 +75,47 @@ def cmd_runs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    import logging
+
+    import uvicorn
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    uvicorn.run("dispatchd.app:create_app", factory=True, host=args.host, port=args.port)
+    return 0
+
+
+def cmd_schedules(args: argparse.Namespace) -> int:
+    """Each schedule and when it fires next (as of the last scheduler pass)."""
+    settings = Settings.from_env()
+    from dispatchd import db
+    from dispatchd.runner import Runner
+    from dispatchd.scheduler import Scheduler
+
+    db.init_db(settings.db_path, backup_dir=settings.backup_dir)
+    defs = _defs(settings)
+    state = Scheduler(Runner(None, settings.db_path, lambda: defs), lambda: defs).state()
+    for name, s in defs.schedules.items():
+        st = state.get(name, {})
+        status = "disabled" if not s.enabled else f"next {st.get('next_fire') or '(not yet)'}"
+        print(f"{name:24} {s.cron:16} {s.timezone:20} {status}  last {st.get('last_fire') or '-'}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="dispatchd", description="Scheduled and webhook-triggered rooms"
     )
     sub = p.add_subparsers(dest="command", required=True)
+    serve = sub.add_parser("serve", help="run the service: scheduler and run execution")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8768)
+    serve.set_defaults(func=cmd_serve)
     sub.add_parser("check-config", help="validate $DISPATCHD_CONFIG").set_defaults(
         func=cmd_check_config
+    )
+    sub.add_parser("schedules", help="schedules and when they fire next").set_defaults(
+        func=cmd_schedules
     )
     r = sub.add_parser("run", help="run a schedule now, in the foreground")
     r.add_argument("schedule")
