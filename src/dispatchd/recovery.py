@@ -7,6 +7,9 @@ restored themselves, and resuming would summon work nobody asked for again. The 
 its room and session URLs for an operator to look at. Schedules keep their next fire
 times; a fire missed while dispatchd was down is skipped by the usual catch-up rule.
 
+Webhook secrets retired since the snapshot (rotated, or the webhook deleted) are cleared
+again from the revocation journal; such a webhook answers 503 until an operator rotates it.
+
 Not restorable: webhook deliveries after the snapshot are unknown to it, so a caller's
 redelivery of one of those starts a new run.
 """
@@ -16,6 +19,7 @@ from pathlib import Path
 from dispatchd import db, ops
 from dispatchd.config import Settings
 from dispatchd.runner import now_iso
+from dispatchd.store import clear_retired_secrets
 
 
 def backup(settings: Settings, dest: Path) -> dict:
@@ -31,9 +35,10 @@ def post_restore(settings: Settings) -> dict:
                 " finished_at = ?, updated_at = ? where state in ('pending', 'running')",
                 (now_iso(), now_iso()),
             ).rowcount
+        cleared = clear_retired_secrets(conn, ops.Journal(settings.journal_path))
     finally:
         conn.close()
-    return {"runs_failed": n}
+    return {"runs_failed": n, "webhook_secrets_cleared": cleared}
 
 
 def restore(settings: Settings, src: Path, *, force: bool = False) -> dict:

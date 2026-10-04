@@ -131,7 +131,9 @@ class Schedule(Strict):
 
 
 class Webhook(Strict):
-    secret_env: str = Field(pattern=r"^[A-Z][A-Z0-9_]*$")
+    # The config file names an env var holding the secret; a webhook created through the
+    # operator API has none: dispatchd generated its secret and keeps it in its database.
+    secret_env: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]*$")
     use: str
     task_template: str = "{prompt}"
     max_prompt_bytes: int = Field(default=4000, ge=1, le=64_000)
@@ -171,7 +173,7 @@ class Definitions(Strict):
         return [
             f"{n}: ${w.secret_env}"
             for n, w in self.webhooks.items()
-            if w.enabled and not env.get(w.secret_env)
+            if w.enabled and w.secret_env and not env.get(w.secret_env)
         ]
 
 
@@ -187,10 +189,17 @@ class Settings:
     poll_seconds: float = 5.0  # how often a run checks its workers
     tick_seconds: float = 15.0  # how often schedules are checked
     operators: tuple[str, ...] = ()  # identities allowed on the operator HTTP API
+    # Retired webhook secrets are journaled here, outside the database, and cleared again
+    # after a restore (ops.py "Revocation journal"). Keep it off the data volume if you can.
+    revocation_journal: Path | None = None
 
     @property
     def db_path(self) -> Path:
         return self.data_dir / "dispatchd.sqlite"
+
+    @property
+    def journal_path(self) -> Path:
+        return self.revocation_journal or self.data_dir / "revocations.jsonl"
 
     @property
     def backup_dir(self) -> Path:
@@ -210,4 +219,5 @@ class Settings:
             poll_seconds=float(env("DISPATCHD_POLL_SECONDS", 5)),
             tick_seconds=float(env("DISPATCHD_TICK_SECONDS", 15)),
             operators=tuple(o for o in env("DISPATCHD_OPERATORS", "").split(",") if o),
+            revocation_journal=Path(j) if (j := env("DISPATCHD_REVOCATION_JOURNAL")) else None,
         )

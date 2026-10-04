@@ -109,9 +109,10 @@ def test_v1_database_migrates_to_v2(tmp_path):
     conn.commit()
     conn.close()
     result = db.init_db(path, backup_dir=tmp_path / "bk")
-    assert (result["from"], result["to"]) == (1, 2) and result["backup"]
+    assert (result["from"], result["to"]) == (1, db.SCHEMA_VERSION) and result["backup"]
     conn = sqlite3.connect(path)
     assert conn.execute("select name, spec from schedule_state").fetchall() == [("triage", None)]
+    assert conn.execute("select count(*) from definitions").fetchone() == (0,)  # v3
 
 
 # ----- the service ----------------------------------------------------------------------
