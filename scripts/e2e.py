@@ -49,7 +49,7 @@ def check(cond: bool, what: str) -> None:
 
 def main() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="dispatch-e2e-"))
-    ports = {n: free_port() for n in ("lobby", "rooms", "agentd")}
+    ports = {n: free_port() for n in ("lobby", "rooms", "agentd", "dispatch")}
     urls = {n: f"http://127.0.0.1:{p}" for n, p in ports.items()}
     base_env = {k: v for k, v in os.environ.items() if not k.startswith(("LOBBYD_", "ROM_"))}
     lobby_env = {
@@ -69,6 +69,9 @@ def main() -> None:
         "odin": key("odin", "agent"),
         "rooms": key("rooms-a", "roomsd", urls["rooms"]),
         "agentd": key("agentd-e2e", "agentd", urls["agentd"]),
+        # dispatchd's operator API: a service key approves its URL; ops is an operator
+        "dispatchd": key("dispatchd", "service", urls["dispatch"]),
+        "ops": key("ops", "agent"),
     }
     (tmp / "agentd.yaml").write_text(
         # agentd's grant is the outer bound on anything a dispatch template asks for
@@ -147,7 +150,7 @@ webhooks:
         },
     )
     try:
-        for url in urls.values():
+        for url in (urls["lobby"], urls["rooms"], urls["agentd"]):
             for _ in range(100):
                 try:
                     if httpx.get(f"{url}/healthz", timeout=1).status_code == 200:
@@ -220,11 +223,17 @@ webhooks:
         check(" done " in out.stdout and "manual" in out.stdout, "runs lists it")
 
         # the service: an every-minute schedule fires on its own
-        port = free_port()
+        port = ports["dispatch"]
         start(
             "dispatchd",
             [bin_(HERE, "dispatchd"), "serve", "--port", str(port)],
-            {**env, "DISPATCHD_TICK_SECONDS": "1"},
+            {
+                **env,
+                "DISPATCHD_TICK_SECONDS": "1",
+                "DISPATCHD_BASE_URL": urls["dispatch"],
+                "DISPATCHD_OPERATORS": f"ops@{DOMAIN}",
+                "LOBBYD_DOMAIN": DOMAIN,
+            },
         )
         deadline = time.monotonic() + 150
         scheduled = ""
@@ -241,6 +250,44 @@ webhooks:
         check(" done " in scheduled and " schedule " in scheduled, "scheduled run fired, done")
         ready = httpx.get(f"http://127.0.0.1:{port}/readyz", timeout=5).json()
         check(ready["ready"] is True, "dispatchd ready")
+
+        # the operator API with real lobbyd tokens (the live test found these couldn't be
+        # minted before lobbyd's `service` scope existed)
+        def operator_token(api_key: str) -> str:
+            r = httpx.post(
+                f"{urls['lobby']}/v1/token",
+                json={"audience": urls["dispatch"]},
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10,
+            )
+            check(r.status_code == 200, f"lobbyd mints a token for dispatchd ({r.status_code})")
+            return r.json()["access_token"]
+
+        ops_auth = {"Authorization": f"Bearer {operator_token(keys['ops'])}"}
+        runs = httpx.get(f"{urls['dispatch']}/v1/runs", headers=ops_auth, timeout=10)
+        check(runs.status_code == 200 and len(runs.json()) >= 2, "operator lists runs")
+        scheds = httpx.get(f"{urls['dispatch']}/v1/schedules", headers=ops_auth, timeout=10)
+        check(
+            any(x["name"] == "every-minute" and x["next_fire"] for x in scheds.json()),
+            "operator sees schedules",
+        )
+        trig = httpx.post(
+            f"{urls['dispatch']}/v1/schedules/triage/run", headers=ops_auth, timeout=10
+        )
+        check(
+            trig.status_code == 202 and trig.json()["source"] == "manual",
+            "operator triggers a schedule",
+        )
+        odin_auth = {"Authorization": f"Bearer {operator_token(keys['odin'])}"}
+        refused = httpx.get(f"{urls['dispatch']}/v1/runs", headers=odin_auth, timeout=10)
+        check(refused.status_code == 403, "a non-operator agent is refused")
+        svc = httpx.post(
+            f"{urls['lobby']}/v1/token",
+            json={"audience": urls["dispatch"]},
+            headers={"Authorization": f"Bearer {keys['dispatchd']}"},
+            timeout=10,
+        )
+        check(svc.status_code == 403, "the service key itself can't exchange tokens")
 
         # a signed webhook delivery starts a run; the same delivery again doesn't
         sys.path.insert(0, str(HERE / "src"))
