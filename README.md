@@ -26,7 +26,7 @@ templates:
       - {name: ollama, worker_type: ollama, profile: read_only_research}
     peers:
       - {agent: odin@local, rights: [read, write], role: reviewer, respond_within: 30m}
-    run: {max_duration: 1h, max_concurrent: 1, on_overlap: skip}
+    run: {max_duration: 1h, max_concurrent: 1, on_overlap: skip, order: parallel}
 
 schedules:
   weekday-triage:
@@ -51,6 +51,8 @@ schedules:
 - **Peers** are existing agents that receive a lobbyd offer. They join with their own identity, after dispatchd grants them rights in the closed room.
 
 **When a run ends:** oneshot worker types end the run as soon as they finish. Interactive worker types keep the room open until `max_duration`.
+
+**Worker order:** `run.order` is `parallel` (the default: summon everyone at once) or `sequential`. Sequential summons each worker only after the previous one's session has ended, so later workers can read and build on earlier posts; use it with oneshot worker types. If the time limit hits first, the remaining workers aren't summoned, and the run says so.
 
 ## Run
 

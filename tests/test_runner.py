@@ -220,3 +220,62 @@ def test_a_removed_template_fails_the_run(make, tmp_path):
     run, _ = r.create("schedule", "triage", "review", "Goal")
     r.definitions = lambda: Definitions.model_validate({"templates": {}})
     assert r.execute(run["id"])["state"] == "failed"
+
+
+class SeqStub(Stub):
+    """Records, at each summon, which earlier sessions had already finished."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.finished_at_summon: list[list[str]] = []
+
+    def summon(self, room_url, task, **kw):
+        done = [sid for sid, seq in self.status.items() if seq == ["completed"]]
+        self.finished_at_summon.append(done)
+        return super().summon(room_url, task, **kw)
+
+
+def test_sequential_workers_start_after_the_previous_one_ends(make):
+    stub = SeqStub(polls=2)
+    r = make(stub, order="sequential")
+    run, _ = r.create("schedule", "triage", "review", "Goal")
+    run = r.execute(run["id"])
+    assert run["state"] == "done" and run["error"] is None
+    # claude was summoned first; ollama only once claude's session had completed
+    assert stub.finished_at_summon == [[], ["agt_1"]]
+
+
+def test_parallel_is_the_default(make):
+    stub = SeqStub(polls=2)
+    r = make(stub)
+    run, _ = r.create("schedule", "triage", "review", "Goal")
+    r.execute(run["id"])
+    assert stub.finished_at_summon == [[], []]  # both summoned before either finished
+
+
+def test_sequential_resumes_mid_sequence(make):
+    stub = SeqStub(polls=1)
+    r = make(stub, order="sequential")
+    run, _ = r.create("schedule", "triage", "review", "Goal")
+    t = r.definitions().templates["review"]
+    r._room(r.get(run["id"]), t)
+    r._seed(r.get(run["id"]), t)
+    r._peers(r.get(run["id"]), t)
+    stub.fail_summon = "ollama"
+    with pytest.raises(RuntimeError):  # crashed after the first worker finished
+        r._workers(r.get(run["id"]), t)
+    stub.fail_summon = None
+    run = r.execute(run["id"])
+    assert run["state"] == "done"
+    assert [c[1].split("-")[0] for c in stub.calls if c[0] == "summon"] == ["claude", "ollama"]
+
+
+def test_sequential_deadline_stops_the_line(make):
+    stub = SeqStub(polls=10_000)  # the first worker never finishes
+    r = make(stub, order="sequential")
+    run, _ = r.create("schedule", "triage", "review", "Goal")
+    run = r.execute(run["id"])
+    assert run["state"] == "done"
+    assert run["error"] == "max_duration reached before 1 worker(s) were summoned"
+    assert [c[0] for c in stub.calls].count("summon") == 1
+    assert [c[2] for c in stub.calls if c[0] == "stop"] == ["dispatch_max_duration"]

@@ -75,6 +75,10 @@ class RunSpec(Strict):
     max_duration: int = 3600
     max_concurrent: int = Field(default=1, ge=1)
     on_overlap: Literal["skip", "allow"] = "skip"
+    # parallel: summon every worker at once. sequential: summon each after the previous
+    # one's session has ended, so later workers can read and build on earlier posts (for
+    # oneshot worker types; an interactive worker would hold the line until max_duration).
+    order: Literal["parallel", "sequential"] = "parallel"
 
     _dur = field_validator("max_duration", mode="before")(lambda v: seconds(v))
 
