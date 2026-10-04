@@ -324,6 +324,51 @@ webhooks:
         hook_room, hook_rid = dispatch.room(status["room_url"])
         opening = hook_room.messages(hook_rid)["messages"][0]["body"]
         check(opening.startswith("Is SQLite enough for v1?"), "webhook goal posted")
+
+        # definitions through the operator API: a webhook with a generated secret, used at once
+        api = f"{urls['dispatch']}/v1"
+        made = httpx.post(
+            f"{api}/webhooks/api-hook",
+            headers=ops_auth,
+            json={"use": "review", "task_template": "API hook: {prompt}"},
+            timeout=10,
+        )
+        check(
+            made.status_code == 201 and made.json()["source"] == "api", "operator creates a webhook"
+        )
+        api_secret = made.json()["secret"]
+        shown = httpx.get(f"{api}/webhooks/api-hook", headers=ops_auth, timeout=10).json()
+        check("secret" not in shown, "the webhook secret isn't shown again")
+        ts = int(time.time())
+        api_body = json.dumps({"prompt": "ping"}).encode()
+        hook = httpx.post(
+            f"http://127.0.0.1:{port}/v1/hooks/api-hook",
+            content=api_body,
+            headers={
+                "X-Rom-Timestamp": str(ts),
+                "X-Rom-Signature": sign(api_secret, ts, api_body),
+                "X-Rom-Delivery": "e2e-api-1",
+                "content-type": "application/json",
+            },
+            timeout=10,
+        )
+        check(hook.status_code == 202, "API webhook accepts its generated secret")
+        sched = httpx.put(
+            f"{api}/schedules/api-nightly",
+            headers=ops_auth,
+            json={"cron": "30 2 * * *", "use": "review", "goal": "Sweep."},
+            timeout=10,
+        )
+        check(
+            sched.status_code == 200 and sched.json()["source"] == "api", "operator adds a schedule"
+        )
+        clash = httpx.put(
+            f"{api}/schedules/triage",
+            headers=ops_auth,
+            json={"cron": "30 2 * * *", "use": "review", "goal": "x"},
+            timeout=10,
+        )
+        check(clash.status_code == 409, "file schedules are read-only over the API")
         print("e2e passed")
     finally:
         for p in procs:
