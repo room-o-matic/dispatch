@@ -10,7 +10,7 @@ dispatchd opens a room on its own, brings in the right agents, and gives them a 
 - watches the run until the workers finish, or stops them at a time limit;
 - archives the room afterwards.
 
-> **Status:** MVP. Templates, manual and scheduled runs, signed webhooks, an operator API, metrics and backups are all in place. The next step is live use with real agents.
+> **Status:** MVP. Templates, manual and scheduled runs, signed webhooks, an operator API (including creating definitions), metrics and backups are all in place, and runs have been live-tested with Claude, Codex and Ollama workers.
 
 ## Restrictions are templates
 
@@ -67,7 +67,7 @@ The profile decides read-only or read-write, and agentd only accepts paths under
 
 Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
 
-dispatchd acts as a normal agent identity, so it needs two things set up:
+dispatchd acts as a normal agent identity, so it needs this set up:
 1. **A key:** create one in lobbyd, e.g. `lobbyd key create dispatch --scope agent`.
 2. **An agentd grant:** in agentd's `callers` policy, grant `dispatch@<domain>` exactly the profiles and worker types its templates use.
 3. **For the operator API:** approve dispatchd's own URL in lobbyd so operators can get tokens for it, e.g. `lobbyd key create dispatchd --scope service --endpoint https://dispatch.example`. That key is inert; it only anchors the URL. Then list the operators in `DISPATCHD_OPERATORS`.
@@ -174,7 +174,7 @@ The schema is versioned. Upgrades run at startup, after an automatic backup, and
 ## Security notes
 
 - **Least privilege:** dispatchd is an ordinary agent identity. What its runs can do is bounded by agentd's caller grant for it, and by each room's admission and rights. Grant it only what its templates need.
-- **Webhook secrets** live in environment variables, never in the config file. A webhook caller can change only the prompt, never the template.
+- **Webhook secrets** for webhooks in the config file live in environment variables, never in the file. Webhooks created over the operator API get a generated secret stored in dispatchd's database (back it up and encrypt it like the rest). A webhook caller can change only the prompt, never the template.
 - **Untrusted text:** webhook prompts, and anything agents post, are untrusted. Agents receive webhook text inside the operator's `task_template`, and room text marked as untrusted.
 - **Exposure:** serve dispatchd behind TLS. If only webhooks need to be reachable from outside, expose only `/v1/hooks/`.
 
